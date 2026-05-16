@@ -1,3 +1,6 @@
+-- [ 1. ВСТРАИВАЕМ БИБЛИОТЕКУ НАПРЯМУЮ ] --
+local Library = (function()
+    
 local cloneref = (cloneref or clonereference or function(instance: any)
     return instance
 end)
@@ -28,7 +31,7 @@ local Toggles = {}
 local Options = {}
 local Tooltips = {}
 
-local BaseURL = "https://raw.githubusercontent.com/toporik242/Raid-/ad38c7a93a5517a342329be983a03b2a1cf45d74/Raid%E1%B5%97%E1%B5%90?token=GHSAT0AAAAAAD24QXGO2TA4AXGR6OF2U3F22PXJNLA"
+local BaseURL = "https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/"
 local CustomImageManager = {}
 local CustomImageManagerAssets = {
     TransparencyTexture = {
@@ -9484,3 +9487,829 @@ Library:GiveSignal(Teams.ChildRemoved:Connect(OnTeamChange))
 
 getgenv().Library = Library
 return Library
+
+end)()
+
+-- Примечание: SaveManager и ThemeManager всё ещё требуют ссылки, 
+-- так как их кода не было в твоих файлах. Если хочешь отвязать и их,
+-- их код нужно встроить аналогичным образом.
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+
+-- [ 2. ТВОЙ ОСНОВНОЙ КОД + НОВОЕ РАБОЧЕЕ ESP ] --
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService        = game:GetService("RunService")
+local Players           = game:GetService("Players")
+local UIS               = game:GetService("UserInputService")
+local Debris            = game:GetService("Debris")
+local Lighting          = game:GetService("Lighting")
+local Player            = Players.LocalPlayer
+
+local Options           = Library.Options
+local cam               = workspace.CurrentCamera
+
+local function GetSafeParent()
+    local success, coreGui = pcall(function() return game:GetService("CoreGui") end)
+    if success and coreGui then return coreGui end
+    return Player:WaitForChild("PlayerGui")
+end
+local ChamParent = GetSafeParent()
+
+local Window = Library:CreateWindow({
+    Title            = "Goose",
+    Footer           = "TridentSurvivalV5",
+    NotifySide       = "Right",
+    ShowCustomCursor = false 
+})
+
+Library.ToggleKeybind = Enum.KeyCode.RightShift
+
+
+-- [ Fullbright Logic ] --
+local Lighting = game:GetService("Lighting")
+local FullbrightConnection
+
+local function ToggleFullbright(state)
+    if state then
+        if FullbrightConnection then FullbrightConnection:Disconnect() end
+        
+        local function Apply()
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.Ambient = Color3.fromRGB(178, 178, 178)
+            Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+        end
+        
+        FullbrightConnection = Lighting.Changed:Connect(Apply)
+        Apply()
+    else
+        if FullbrightConnection then 
+            FullbrightConnection:Disconnect() 
+            FullbrightConnection = nil 
+        end
+        
+        -- Сброс к стандартным значениям Roblox
+        Lighting.Brightness = 1
+        Lighting.ClockTime = 12
+        Lighting.FogEnd = 10000
+        Lighting.GlobalShadows = true
+        Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+        Lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
+    end
+end
+
+local Tabs = {
+    COMBAT          = Window:AddTab("COMBAT", "swords"),
+    VISUAL          = Window:AddTab("VISUALS", "scan-eye"),
+    ["UI Settings"] = Window:AddTab("UI SETTINGS", "settings")
+}
+
+-- [ COMBINED ADVANCED ESP SYSTEM ] --
+-- Объединено: Skeleton + OffScreen (bob2) + Chams + Tracers (bob1)
+local Esp = {
+    Enabled = true,
+    Boxes = true,
+    Skeleton = true,
+    Names = true,
+    Distance = true,
+    Health = true,
+    Tracers = false,
+    Chams = false,
+    ChamsColor = Color3.fromRGB(255, 255, 255),
+    OffScreen = true,
+    OffScreenRadius = 150,
+    OffScreenSize = 15,
+    RenderDist = 1000,
+    PlayerColor = Color3.fromRGB(0, 255, 0),
+    BotColor = Color3.fromRGB(255, 0, 0),
+    Objects = {}
+}
+
+local SkeletonConnections = {
+    {"Head", "UpperTorso"},
+    {"UpperTorso", "LowerTorso"},
+    {"UpperTorso", "LeftUpperArm"}, {"LeftUpperArm", "LeftLowerArm"}, {"LeftLowerArm", "LeftHand"},
+    {"UpperTorso", "RightUpperArm"}, {"RightUpperArm", "RightLowerArm"}, {"RightLowerArm", "RightHand"},
+    {"LowerTorso", "LeftUpperLeg"}, {"LeftUpperLeg", "LeftLowerLeg"}, {"LeftLowerLeg", "LeftFoot"},
+    {"LowerTorso", "RightUpperLeg"}, {"RightUpperLeg", "RightLowerLeg"}, {"RightLowerLeg", "RightFoot"}
+}
+
+local function CreateESP(model)
+    -- Поддержка как игроков (плеер объект), так и моделей (NPC)
+    local isPlayerObj = (typeof(model) == "Instance" and model:IsA("Player"))
+    if isPlayerObj then
+        if model == Player then return end
+    else
+        if model == Player.Character or Esp.Objects[model] then return end
+    end
+
+    local draws = { Skeleton = {} }
+
+    draws.Box = Drawing.new("Square"); draws.Box.Thickness = 1; draws.Box.Filled = false; draws.Box.Visible = false
+    draws.HealthBarOutline = Drawing.new("Square"); draws.HealthBarOutline.Color = Color3.fromRGB(0,0,0); draws.HealthBarOutline.Thickness = 1; draws.HealthBarOutline.Filled = true; draws.HealthBarOutline.Visible = false
+    draws.HealthBar = Drawing.new("Square"); draws.HealthBar.Thickness = 1; draws.HealthBar.Filled = true; draws.HealthBar.Visible = false
+    draws.Name = Drawing.new("Text"); draws.Name.Size = 14; draws.Name.Center = true; draws.Name.Outline = true; draws.Name.Visible = false
+    draws.Dist = Drawing.new("Text"); draws.Dist.Size = 13; draws.Dist.Center = true; draws.Dist.Outline = true; draws.Dist.Visible = false
+    draws.Tracer = Drawing.new("Line"); draws.Tracer.Thickness = 1; draws.Tracer.Visible = false
+    draws.OffScreenArrow = Drawing.new("Triangle"); draws.OffScreenArrow.Thickness = 1; draws.OffScreenArrow.Filled = true; draws.OffScreenArrow.Visible = false
+
+    -- Cham (только для игроков, не NPC)
+    if isPlayerObj then
+        local Cham = Instance.new("Highlight")
+        Cham.Name = "Cham_" .. model.Name
+        Cham.Parent = ChamParent
+        Cham.Enabled = false
+        Cham.FillTransparency = 0.5
+        Cham.OutlineTransparency = 0.1
+        Cham.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        draws.Cham = Cham
+    end
+
+    for i = 1, #SkeletonConnections do
+        local line = Drawing.new("Line"); line.Thickness = 1; line.Visible = false
+        table.insert(draws.Skeleton, line)
+    end
+
+    Esp.Objects[model] = draws
+end
+
+local function RemoveESP(model)
+    if Esp.Objects[model] then
+        local obj = Esp.Objects[model]
+        for k, v in pairs(obj) do
+            if k == "Skeleton" then
+                for _, line in pairs(v) do line:Remove() end
+            elseif k == "Cham" then
+                v:Destroy()
+            else
+                v:Remove()
+            end
+        end
+        Esp.Objects[model] = nil
+    end
+end
+
+-- Регистрируем игроков
+for _, p in pairs(Players:GetPlayers()) do CreateESP(p) end
+Players.PlayerAdded:Connect(CreateESP)
+Players.PlayerRemoving:Connect(RemoveESP)
+
+-- Регистрируем NPC/модели из workspace
+workspace.ChildAdded:Connect(function(child)
+    task.wait(0.1)
+    if child:IsA("Model") and child:FindFirstChild("HumanoidRootPart") and child.Name ~= Player.Name then
+        CreateESP(child)
+    end
+end)
+workspace.ChildRemoved:Connect(function(child)
+    if Esp.Objects[child] then RemoveESP(child) end
+end)
+for _, child in pairs(workspace:GetChildren()) do
+    if child:IsA("Model") and child:FindFirstChild("HumanoidRootPart") and child.Name ~= Player.Name then
+        CreateESP(child)
+    end
+end
+
+local function UpdateOffScreenMarker(draw, pos, color)
+    local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+    local relative = cam.CFrame:PointToObjectSpace(pos)
+    local angle = math.atan2(relative.X, -relative.Z)
+    local direction = Vector2.new(math.sin(angle), -math.cos(angle))
+    local markerPos = center + (direction * Esp.OffScreenRadius)
+    local p1 = markerPos + (direction * Esp.OffScreenSize)
+    local p2 = markerPos + (Vector2.new(math.sin(angle - 2.5), -math.cos(angle - 2.5)) * Esp.OffScreenSize)
+    local p3 = markerPos + (Vector2.new(math.sin(angle + 2.5), -math.cos(angle + 2.5)) * Esp.OffScreenSize)
+    draw.PointA, draw.PointB, draw.PointC, draw.Color, draw.Visible = p1, p2, p3, color, true
+end
+
+RunService.RenderStepped:Connect(function()
+    for entity, obj in pairs(Esp.Objects) do
+        -- entity может быть Player объектом или Model (NPC)
+        local isPlayerObj = (typeof(entity) == "Instance" and entity:IsA("Player"))
+        local char, plr
+        if isPlayerObj then
+            plr = entity
+            char = plr.Character
+        else
+            char = entity
+            plr = Players:GetPlayerFromCharacter(entity)
+        end
+
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local isPlayer = (plr ~= nil)
+        local entityColor = isPlayer and Esp.PlayerColor or Esp.BotColor
+        local entityName = isPlayer and plr.Name or (char and char.Name or "Bot")
+
+        -- Chams (только игроки)
+        if obj.Cham then
+            if Esp.Enabled and Esp.Chams and char then
+                obj.Cham.Adornee = char
+                obj.Cham.Enabled = true
+                obj.Cham.FillColor = Esp.ChamsColor
+                obj.Cham.OutlineColor = Esp.ChamsColor
+            else
+                obj.Cham.Enabled = false
+                obj.Cham.Adornee = nil
+            end
+        end
+
+        if Esp.Enabled and hrp and hum and hum.Health > 0 then
+            local pos, onScreen = cam:WorldToViewportPoint(hrp.Position)
+            local distance = (cam.CFrame.Position - hrp.Position).Magnitude
+
+            if distance <= Esp.RenderDist then
+                if onScreen then
+                    local sizeX, sizeY = 2000 / pos.Z, 3500 / pos.Z
+                    local boxPos = Vector2.new(pos.X - sizeX / 2, pos.Y - sizeY / 2)
+
+                    obj.Box.Visible, obj.Box.Size, obj.Box.Position, obj.Box.Color = Esp.Boxes, Vector2.new(sizeX, sizeY), boxPos, entityColor
+                    obj.Name.Visible, obj.Name.Text, obj.Name.Position, obj.Name.Color = Esp.Names, entityName, Vector2.new(pos.X, boxPos.Y - 15), entityColor
+                    obj.Dist.Visible, obj.Dist.Text, obj.Dist.Position, obj.Dist.Color = Esp.Distance, math.floor(distance) .. "m", Vector2.new(pos.X, boxPos.Y + sizeY + 5), entityColor
+
+                    -- Tracers (только для игроков, не NPC/ботов)
+                    if Esp.Tracers and isPlayer then
+                        obj.Tracer.Visible = true
+                        obj.Tracer.From = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y)
+                        obj.Tracer.To = Vector2.new(pos.X, pos.Y)
+                        obj.Tracer.Color = entityColor
+                    else
+                        obj.Tracer.Visible = false
+                    end
+
+                    -- Health
+                    if Esp.Health then
+                        local hpPct = hum.Health / hum.MaxHealth
+                        obj.HealthBarOutline.Visible = true
+                        obj.HealthBarOutline.Size = Vector2.new(4, sizeY)
+                        obj.HealthBarOutline.Position = Vector2.new(boxPos.X - 6, boxPos.Y)
+                        obj.HealthBar.Visible = true
+                        obj.HealthBar.Size = Vector2.new(2, sizeY * hpPct)
+                        obj.HealthBar.Position = Vector2.new(boxPos.X - 5, boxPos.Y + (sizeY * (1 - hpPct)))
+                        obj.HealthBar.Color = Color3.fromHSV(hpPct * 0.3, 1, 1)
+                    else
+                        obj.HealthBar.Visible = false
+                        obj.HealthBarOutline.Visible = false
+                    end
+
+                    -- Skeleton
+                    if Esp.Skeleton and char then
+                        for i, conn in ipairs(SkeletonConnections) do
+                            local p1, p2 = char:FindFirstChild(conn[1]), char:FindFirstChild(conn[2])
+                            if p1 and p2 then
+                                local vp1, s1 = cam:WorldToViewportPoint(p1.Position)
+                                local vp2, s2 = cam:WorldToViewportPoint(p2.Position)
+                                if s1 and s2 then
+                                    obj.Skeleton[i].Visible = true
+                                    obj.Skeleton[i].From = Vector2.new(vp1.X, vp1.Y)
+                                    obj.Skeleton[i].To = Vector2.new(vp2.X, vp2.Y)
+                                    obj.Skeleton[i].Color = entityColor
+                                else
+                                    obj.Skeleton[i].Visible = false
+                                end
+                            else
+                                obj.Skeleton[i].Visible = false
+                            end
+                        end
+                    else
+                        for _, l in ipairs(obj.Skeleton) do l.Visible = false end
+                    end
+
+                    obj.OffScreenArrow.Visible = false
+                else
+                    obj.Box.Visible = false; obj.Name.Visible = false; obj.Dist.Visible = false
+                    obj.Tracer.Visible = false; obj.HealthBar.Visible = false; obj.HealthBarOutline.Visible = false
+                    for _, l in ipairs(obj.Skeleton) do l.Visible = false end
+                    if Esp.OffScreen then
+                        UpdateOffScreenMarker(obj.OffScreenArrow, hrp.Position, entityColor)
+                    else
+                        obj.OffScreenArrow.Visible = false
+                    end
+                end
+            else
+                obj.Box.Visible = false; obj.Name.Visible = false; obj.Dist.Visible = false
+                obj.Tracer.Visible = false; obj.HealthBar.Visible = false; obj.HealthBarOutline.Visible = false
+                for _, l in ipairs(obj.Skeleton) do l.Visible = false end
+                obj.OffScreenArrow.Visible = false
+            end
+        else
+            obj.Box.Visible = false; obj.Name.Visible = false; obj.Dist.Visible = false
+            obj.Tracer.Visible = false; obj.HealthBar.Visible = false; obj.HealthBarOutline.Visible = false
+            for _, l in ipairs(obj.Skeleton) do l.Visible = false end
+            obj.OffScreenArrow.Visible = false
+        end
+    end
+end)
+
+local VisualsGroup = Tabs.VISUAL:AddLeftGroupbox("PLAYER & BOT ESP", "users")
+
+local WorldGroup = Tabs.VISUAL:AddRightGroupbox("WORLD", "sun")
+
+WorldGroup:AddToggle("FullbrightToggle", {
+    Text = "Fullbright",
+    Default = false,
+    Callback = function(Value)
+        ToggleFullbright(Value)
+    end
+})
+
+VisualsGroup:AddToggle("EspMaster",    { Text = "Enable ESP",             Default = true,  Callback = function(v) Esp.Enabled  = v end })
+VisualsGroup:AddToggle("EspBox",       { Text = "Show Boxes",             Default = true,  Callback = function(v) Esp.Boxes    = v end })
+VisualsGroup:AddToggle("EspSkeleton",  { Text = "Show Skeleton",          Default = true,  Callback = function(v) Esp.Skeleton = v end })
+VisualsGroup:AddToggle("EspOffScreen", { Text = "Off-Screen Markers",     Default = true,  Callback = function(v) Esp.OffScreen = v end })
+VisualsGroup:AddToggle("EspTracers",   { Text = "Show Tracers (Players)", Default = false, Callback = function(v) Esp.Tracers  = v end })
+VisualsGroup:AddToggle("EspChams",     { Text = "Show Chams (Players)",   Default = false, Callback = function(v) Esp.Chams   = v end }):AddColorPicker("EspChamsColor", { Default = Color3.fromRGB(255, 255, 255), Callback = function(v) Esp.ChamsColor = v end })
+VisualsGroup:AddToggle("EspHealth",    { Text = "Show Health Bar",        Default = true,  Callback = function(v) Esp.Health   = v end })
+VisualsGroup:AddToggle("EspName",      { Text = "Show Names",             Default = true,  Callback = function(v) Esp.Names    = v end })
+VisualsGroup:AddToggle("EspDistance",  { Text = "Show Distance",          Default = true,  Callback = function(v) Esp.Distance = v end })
+VisualsGroup:AddSlider("EspDistanceMax", { Text = "Max Distance", Default = 1000, Min = 100, Max = 5000, Rounding = 0, Callback = function(v) Esp.RenderDist = v end })
+VisualsGroup:AddColorPicker("PlayerColor", { Title = "Player Color",   Default = Color3.fromRGB(0, 255, 0),  Callback = function(v) Esp.PlayerColor = v end })
+VisualsGroup:AddColorPicker("BotColor",    { Title = "Bot/NPC Color",  Default = Color3.fromRGB(255, 0, 0),  Callback = function(v) Esp.BotColor    = v end })
+
+
+-- [ АИМБОТ И ХИТБОКСЫ (Без изменений) ] --
+local Aimbot = {
+    UI = Tabs.COMBAT:AddRightGroupbox("AIMBOT", "crosshair"),
+    Settings = {
+        enabled      = false,
+        prediction   = false,
+        fovEnabled   = false,
+        aiCheck      = false,
+        teamCheck    = false,
+        fovSize      = 150,
+        fovColor     = Color3.fromRGB(0, 120, 255),
+        smoothness   = 2,
+        aimRadius    = 1000,
+        predUpBase   = 0.5,
+        locked       = nil,
+        lockedPart   = nil,
+        predX        = 0,
+        predY        = 0,
+        weapon       = {side = 0, up = 0},
+        hasWeapon    = false,
+        players      = {},
+    },
+    WeaponSets = {
+        Bow              = {side = 1.1,  up = 3.0  },
+        CrossBow         = {side = 0.55, up = 1.55 },
+        AR15             = {side = 0.10, up = 0.025},
+        M4A1             = {side = 0.20, up = 0    },
+        SCAR             = {side = 0.25, up = 0.40 },
+        SVD              = {side = 0.30, up = 0.1  },
+        C9               = {side = 0.35, up = 1.0  },
+        UZI              = {side = 0.35, up = 0    },
+        USP9             = {side = 0.35, up = 1.0  },
+        Blunderbuss      = {side = 1.0,  up = 0    },
+        PumpShotgun      = {side = 1.0,  up = 0    },
+        EnergyRifle      = {side = 0.5,  up = 0.05 },
+        GaussRifle       = {side = 0.25, up = 0.1  },
+        HMAR             = {side = 0.35, up = 2.0  },
+        LeverActionRifle = {side = 0.35, up = 0.1  },
+        PipePistol       = {side = 1.0,  up = 1.0  },
+        PipeSMG          = {side = 5.0,  up = 0.50 },
+        Magnum           = {side = 0.65, up = 1.0  },
+    },
+    PartSets = {
+        Bow              = {"Arrow","Fabric","Meshes/Bow"},
+        CrossBow         = {"Arrow","BackMetal","Body","FrontNails","Release","SpringSteel","String","Wheel","Slide"},
+        AR15             = {"AnimSaves","Barrel","Body","Bolt","ChargingHandle","Decor","Grip","Mag","Rails","Stock","Muzzle"},
+        M4A1             = {"DefaultSight","Body","Bolt","ChargeHandle","Grip","Mag","Metal","mbrk","Muzzle"},
+        SCAR             = {"DefaultSight","Barrel","Body","ChargingHandle","Decals","Mag","Rails","ShoulderPad","Stock"},
+        SVD              = {"DefaultSight","Body","Bolt","Magazine","Magazine2","Metal2","Wood"},
+        C9               = {"Barrel","Body","Bolt","Decor","Grip","LowerSlide","Mag","Sight1","Sight2","UpperSlide","Muzzle"},
+        UZI              = {"DefaultSight","Body","Body2","Bolt","ChargingHandle","Decor","Grip","Mag","Stock","Muzzle"},
+        USP9             = {"Body","Mag","Slide","Muzzle"},
+        Blunderbuss      = {"Body","Tube","thing","Muzzle"},
+        PumpShotgun      = {"Barrel","Body","MainMetal","RearSight","Shell","Slider","Muzzle"},
+        EnergyRifle      = {"DefaultSight","FrontCover","Glowing","Grip","Mag","Metal","Metal2","RearCover","RearDecor","Screws","Tubes"},
+        GaussRifle       = {"DefaultSight","Barrel","Body","CoilHolders","Coils","Decals1","Decals2","Grip","Housing","Mag","StockBack"},
+        HMAR             = {"DefaultSight","Body","Bolt","Bolts","Cover","Mag","Rails","Spring","Stock","Wood","Muzzle"},
+        LeverActionRifle = {"9mm","DefaultSight","Body","Brass","Hammer","Lever","Metal","Thing","Wood","Muzzle"},
+        PipePistol       = {"DefaultSight","Body","Bolt","Mag","Muzzle"},
+        PipeSMG          = {"DefaultSight","Barrel","Body","Bolt","Flap","Grip","Mag","Stock","Muzzle"},
+        Magnum           = {"Cylinder","Decor","EjectRod","EjectRodDecal","Frame","Grip"},
+    },
+    Cache = {
+        bot       = setmetatable({}, {__mode = "k"}),
+        lastPos   = setmetatable({}, {__mode = "k"}),
+        smoothVel = setmetatable({}, {__mode = "k"}),
+    },
+    FOV = Drawing.new("Circle"),
+}
+
+Aimbot.FOV.Thickness    = 1
+Aimbot.FOV.NumSides     = 64
+Aimbot.FOV.Radius       = Aimbot.Settings.fovSize
+Aimbot.FOV.Filled       = false
+Aimbot.FOV.Visible      = false
+Aimbot.FOV.Transparency = 1
+Aimbot.FOV.Color        = Aimbot.Settings.fovColor
+Aimbot.FOV.ZIndex       = 999
+
+local function updateFovPos()
+    local s = cam.ViewportSize
+    Aimbot.FOV.Position = Vector2.new(s.X / 2, s.Y / 2)
+end
+updateFovPos()
+cam:GetPropertyChangedSignal("ViewportSize"):Connect(updateFovPos)
+
+local function AB_IsTeam(model)
+    if not model then return false end
+    local head = model:FindFirstChild("Head")
+    if not head then return false end
+    local dot = head:FindFirstChild("Dot")
+    return dot and dot.Enabled == true or false
+end
+
+local function AB_IsNPC(model)
+    if not model then return false end
+    local cached = Aimbot.Cache.bot[model]
+    if cached and tick() - cached.time < 2 then return cached.value end
+    local value = false
+    local torso = model:FindFirstChild("Torso")
+    if torso then
+        value = not torso:FindFirstChild("LeftBooster") and true or false
+    else
+        local hrp = model:FindFirstChild("HumanoidRootPart")
+        value = hrp and hrp.CollisionGroup == "NPC" or false
+    end
+    Aimbot.Cache.bot[model] = {value = value, time = tick()}
+    return value
+end
+
+local function AB_GetPath(root, p)
+    local cur = root
+    for n in p:gmatch("[^/]+") do
+        cur = cur:FindFirstChild(n)
+        if not cur then return nil end
+    end
+    return cur
+end
+
+local function AB_GetWeapon()
+    local r = workspace
+    for _, n in ipairs({"Const", "Ignore", "FPSArms"}) do
+        r = r:FindFirstChild(n)
+        if not r then Aimbot.Settings.hasWeapon = false; return nil end
+    end
+    local hand = r:FindFirstChild("HandModel")
+    if not hand then Aimbot.Settings.hasWeapon = false; return nil end
+    for w, parts in next, Aimbot.PartSets do
+        local found = 0
+        for _, p in ipairs(parts) do
+            local part = p:find("/") and AB_GetPath(hand, p) or hand:FindFirstChild(p, true)
+            if part then found = found + 1 end
+        end
+        if found >= #parts * 0.6 then
+            Aimbot.Settings.hasWeapon = true
+            local ws = Aimbot.WeaponSets[w]
+            if ws then
+                Aimbot.Settings.weapon.side = ws.side
+                Aimbot.Settings.weapon.up   = ws.up
+            end
+            return w
+        end
+    end
+    Aimbot.Settings.hasWeapon   = false
+    Aimbot.Settings.weapon.side = 0
+    Aimbot.Settings.weapon.up   = 0
+    return nil
+end
+
+task.spawn(function()
+    while true do task.wait(0.2); AB_GetWeapon() end
+end)
+
+local function AB_GetPart(m)
+    return m and (
+        m:FindFirstChild("Head") or
+        m:FindFirstChild("UpperTorso") or
+        m:FindFirstChild("LowerTorso") or
+        m:FindFirstChild("HumanoidRootPart")
+    )
+end
+
+local function AB_GetVel(m, dt)
+    if not m then return Vector3.new() end
+    local p = AB_GetPart(m)
+    if not p then return Vector3.new() end
+    local t    = tick()
+    local last = Aimbot.Cache.lastPos[m]
+    if not last then
+        Aimbot.Cache.lastPos[m]   = {pos = p.Position, time = t}
+        Aimbot.Cache.smoothVel[m] = Vector3.new()
+        return Vector3.new()
+    end
+    local elapsed = t - last.time
+    if elapsed <= 0 then return Aimbot.Cache.smoothVel[m] or Vector3.new() end
+    local rawVel  = (p.Position - last.pos) / elapsed
+    Aimbot.Cache.lastPos[m] = {pos = p.Position, time = t}
+    local prev   = Aimbot.Cache.smoothVel[m] or Vector3.new()
+    local lerpXZ = math.clamp(dt * 8, 0, 1)
+    local lerpY  = math.clamp(dt * 2, 0, 1)
+    local smooth = Vector3.new(
+        prev.X + (rawVel.X - prev.X) * lerpXZ,
+        prev.Y + (rawVel.Y - prev.Y) * lerpY,
+        prev.Z + (rawVel.Z - prev.Z) * lerpXZ
+    )
+    Aimbot.Cache.smoothVel[m] = smooth
+    return smooth
+end
+
+local function AB_AddPlayer(o)
+    if o:IsA("Model") and o.Name ~= Player.Name then
+        if o:FindFirstChild("HumanoidRootPart") or o:FindFirstChild("LowerTorso") then
+            table.insert(Aimbot.Settings.players, o)
+        end
+    end
+end
+
+for _, v in next, workspace:GetChildren() do AB_AddPlayer(v) end
+workspace.ChildAdded:Connect(AB_AddPlayer)
+workspace.ChildRemoved:Connect(function(o)
+    for i = #Aimbot.Settings.players, 1, -1 do
+        if Aimbot.Settings.players[i] == o then
+            table.remove(Aimbot.Settings.players, i)
+            Aimbot.Cache.lastPos[o]   = nil
+            Aimbot.Cache.bot[o]       = nil
+            Aimbot.Cache.smoothVel[o] = nil
+            break
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+    local S = Aimbot.Settings
+    if not S.enabled then
+        S.locked = nil; S.lockedPart = nil
+        S.predX = 0; S.predY = 0
+        Aimbot.FOV.Visible = false
+        return
+    end
+    Aimbot.FOV.Visible = S.fovEnabled
+    local camPos = cam.CFrame.Position
+    local vp     = cam.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+
+    if S.locked and S.locked.Parent then
+        local part = AB_GetPart(S.locked)
+        if part then
+            local sp, on = cam:WorldToViewportPoint(part.Position)
+            if on then
+                local d2c = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                if d2c > S.fovSize * 2 then S.locked = nil; S.lockedPart = nil end
+            else
+                S.locked = nil; S.lockedPart = nil
+            end
+        else
+            S.locked = nil; S.lockedPart = nil
+        end
+    else
+        S.locked = nil; S.lockedPart = nil
+    end
+
+    if not S.locked then
+        local bestDist = math.huge
+        local bestD2C  = math.huge
+        for _, pl in ipairs(S.players) do
+            if not pl or not pl.Parent then continue end
+            if S.aiCheck      and AB_IsNPC(pl)     then continue end
+            if S.teamCheck    and AB_IsTeam(pl)    then continue end
+            local part = AB_GetPart(pl)
+            if not part then continue end
+            local dist = (camPos - part.Position).Magnitude
+            if dist > S.aimRadius then continue end
+            local sp, on = cam:WorldToViewportPoint(part.Position)
+            if not on then continue end
+            local d2c = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+            if d2c > S.fovSize then continue end
+            if dist < bestDist or (dist == bestDist and d2c < bestD2C) then
+                bestDist = dist; bestD2C = d2c
+                S.locked = pl; S.lockedPart = part
+            end
+        end
+    end
+
+    if not S.locked then S.predX = 0; S.predY = 0; return end
+
+    local tPart = AB_GetPart(S.locked)
+    if not tPart then S.locked = nil; S.predX = 0; S.predY = 0; return end
+
+    local tDist  = (camPos - tPart.Position).Magnitude
+    local tVel   = AB_GetVel(S.locked, dt)
+    local sp, on = cam:WorldToViewportPoint(tPart.Position)
+    if not on then S.predX = 0; S.predY = 0; return end
+
+    if not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+        S.predX = 0; S.predY = 0; return
+    end
+
+    local dx = sp.X - center.X
+    local dy = sp.Y - center.Y
+    local mx = dx / S.smoothness
+    local my = dy / S.smoothness
+
+    if S.prediction and S.hasWeapon and tPart then
+        local vm    = tVel.Magnitude
+        local upOff = 0
+        if S.weapon.up > 0 then
+            upOff = (tDist / 12) * S.weapon.up * S.predUpBase
+        end
+        local sox = 0
+        if S.weapon.side > 0 and vm > 2 then
+            local velDir = tVel / vm
+            local sm = math.clamp((vm - 2) / 8, 0, 1)
+            local mf = (tDist / 20) * S.weapon.side * 0.6 * sm
+            local pp, ons = cam:WorldToViewportPoint(tPart.Position + velDir * mf)
+            if ons then sox = math.clamp(pp.X - sp.X, -35, 35) end
+        end
+        local sf = math.min(dt * 12, 0.3)
+        S.predX = S.predX + (sox    - S.predX) * sf
+        S.predY = S.predY + (-upOff - S.predY) * sf
+        mousemoverel(mx + S.predX, my + S.predY)
+    else
+        S.predX = 0; S.predY = 0
+        mousemoverel(mx, my)
+    end
+end)
+
+Aimbot.UI:AddToggle("Enable", {
+    Text = "Enable Aimbot", Default = false,
+    Callback = function(v) Aimbot.Settings.enabled = v; if not v then Aimbot.FOV.Visible = false end end
+})
+Aimbot.UI:AddToggle("Prediction", {
+    Text = "Enable Prediction", Default = false,
+    Callback = function(v) Aimbot.Settings.prediction = v end
+})
+Aimbot.UI:AddToggle("AICheck", {
+    Text = "AI Check", Default = false,
+    Callback = function(v) Aimbot.Settings.aiCheck = v end
+})
+Aimbot.UI:AddToggle("TeamCheck", {
+    Text = "Team Check", Default = false,
+    Callback = function(v) Aimbot.Settings.teamCheck = v end
+})
+local fovToggle = Aimbot.UI:AddToggle("FovEnable", {
+    Text = "Show FOV Circle", Default = false,
+    Callback = function(v)
+        Aimbot.Settings.fovEnabled = v
+        Aimbot.FOV.Visible = v and Aimbot.Settings.enabled
+    end
+})
+fovToggle:AddColorPicker("FovColor", {
+    Title = "FOV Color", Default = Color3.fromRGB(0, 120, 255),
+    Callback = function(v) Aimbot.Settings.fovColor = v; Aimbot.FOV.Color = v end
+})
+Aimbot.UI:AddSlider("FovSize", {
+    Text = "FOV Size", Default = 150, Min = 50, Max = 500, Rounding = 0, Suffix = "px",
+    Callback = function(v) Aimbot.Settings.fovSize = v; Aimbot.FOV.Radius = v end
+})
+Aimbot.UI:AddSlider("Smoothness", {
+    Text = "Smoothness", Default = 2, Min = 1, Max = 10, Rounding = 1,
+    Callback = function(v) Aimbot.Settings.smoothness = v end
+})
+Aimbot.UI:AddSlider("AimRadius", {
+    Text = "Aimbot Radius", Default = 1000, Min = 100, Max = 1000, Rounding = 0, Suffix = "st",
+    Callback = function(v) Aimbot.Settings.aimRadius = v end
+})
+
+local Hitbox = {
+    UI = Tabs.COMBAT:AddLeftGroupbox("HITBOX", "box"),
+    Settings = {
+        enabled = false, 
+        sizeX = 4, sizeY = 4, sizeZ = 4,
+        transparency = 0.50, color = Color3.fromRGB(0, 120, 255),
+        aiCheck = false, teamCheck = false,
+        target = "Head", mixSpeed = 1.9, canCollide = false,
+    },
+    Original = {}, MixToken = 0,
+}
+
+local function HB_IsTeam(model)
+    if not model then return false end
+    local h = model:FindFirstChild("Head")
+    return h and h:FindFirstChild("Dot") and h.Dot.Enabled == true or false
+end
+
+local function HB_IsNPC(model)
+    local torso = model:FindFirstChild("Torso")
+    if torso then
+        if torso.CollisionGroup == "NPC" then return true end
+        if torso:FindFirstChild("LeftBooster") then return false end
+        return true
+    end
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    return hrp and hrp.CollisionGroup == "NPC" or false
+end
+
+Hitbox.ShouldSkip = function(model)
+    if not model or not model.Parent then return true end
+    local s = Hitbox.Settings
+    if s.aiCheck and HB_IsNPC(model) then return true end
+    if s.teamCheck and HB_IsTeam(model) then return true end
+    return false
+end
+
+Hitbox.Save = function(part)
+    if not Hitbox.Original[part] then
+        Hitbox.Original[part] = {
+            Size = part.Size,
+            Transparency = part.Transparency,
+            Color = part.Color,
+            Material = part.Material,
+            CanCollide = part.CanCollide
+        }
+    end
+end
+
+Hitbox.Restore = function(part)
+    if not part or not part.Parent then return end
+    local o = Hitbox.Original[part]
+    if not o then return end
+    part.Size = o.Size; part.Transparency = o.Transparency
+    part.Color = o.Color; part.Material = o.Material; part.CanCollide = o.CanCollide
+end
+
+Hitbox.ApplyToPart = function(part)
+    if not part or not part:IsA("BasePart") then return end
+    Hitbox.Save(part)
+    local s = Hitbox.Settings
+    part.Size = Vector3.new(s.sizeX, s.sizeY, s.sizeZ)
+    part.Transparency = s.transparency
+    part.Color = s.color
+    part.CanCollide = false 
+end
+
+Hitbox.RestoreAll = function()
+    for part, o in pairs(Hitbox.Original) do
+        if part and part.Parent then
+            part.Size = o.Size; part.Transparency = o.Transparency
+            part.Color = o.Color; part.Material = o.Material; part.CanCollide = o.CanCollide
+        end
+    end
+    Hitbox.Original = {}
+end
+
+Hitbox.IsCandidate = function(m)
+    return m:IsA("Model") and m.Name ~= Player.Name and (m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart"))
+end
+
+Hitbox.ApplyToModel = function(model)
+    if not model or not model.Parent then return end
+    local s = Hitbox.Settings
+    local head = model:FindFirstChild("Head")
+    local torso = model:FindFirstChild("Torso") or model:FindFirstChild("HumanoidRootPart")
+    if not head or not torso then return end
+    if Hitbox.ShouldSkip(model) or not s.enabled then
+        Hitbox.Restore(head); Hitbox.Restore(torso)
+        return
+    end
+    if s.target == "Head" then Hitbox.ApplyToPart(head); Hitbox.Restore(torso)
+    elseif s.target == "Torso" then Hitbox.ApplyToPart(torso); Hitbox.Restore(head) end
+end
+
+Hitbox.UpdateAll = function()
+    local s = Hitbox.Settings
+    if s.target == "Mix" then return end
+    for _, model in pairs(workspace:GetChildren()) do
+        if Hitbox.IsCandidate(model) then Hitbox.ApplyToModel(model) end
+    end
+end
+
+Hitbox.UI:AddToggle("EnableHitbox", { 
+    Text = "Enable Hitbox", Default = false, 
+    Callback = function(v) 
+        Hitbox.Settings.enabled = v
+        if not v then Hitbox.RestoreAll() else Hitbox.UpdateAll() end 
+    end 
+}):AddColorPicker("HitboxColor", { Default = Color3.fromRGB(0, 120, 255), Callback = function(v) Hitbox.Settings.color = v; Hitbox.UpdateAll() end })
+
+Hitbox.UI:AddDropdown("Target", { Text = "Target", Values = {"Head", "Torso", "Mix"}, Default = "Head", Callback = function(v) Hitbox.Settings.target = v; Hitbox.UpdateAll() end })
+
+Hitbox.UI:AddToggle("AICheckHB", { Text = "AI Check", Default = false, Callback = function(v) Hitbox.Settings.aiCheck = v; Hitbox.UpdateAll() end })
+Hitbox.UI:AddToggle("TeamCheckHB", { Text = "Team Check", Default = false, Callback = function(v) Hitbox.Settings.teamCheck = v; Hitbox.UpdateAll() end })
+
+Hitbox.UI:AddSlider("MixSpeed", { Text = "Mix Speed", Default = 1.9, Min = 0.1, Max = 5.0, Rounding = 1, Suffix = "s", Callback = function(v) Hitbox.Settings.mixSpeed = v end })
+
+Hitbox.UI:AddSlider("SizeX", { Text = "Size X", Default = 4, Min = 1, Max = 15, Rounding = 1, Suffix = "st", Callback = function(v) Hitbox.Settings.sizeX = v; Hitbox.UpdateAll() end })
+Hitbox.UI:AddSlider("SizeY", { Text = "Size Y", Default = 4, Min = 1, Max = 15, Rounding = 1, Suffix = "st", Callback = function(v) Hitbox.Settings.sizeY = v; Hitbox.UpdateAll() end })
+Hitbox.UI:AddSlider("SizeZ", { Text = "Size Z", Default = 4, Min = 1, Max = 15, Rounding = 1, Suffix = "st", Callback = function(v) Hitbox.Settings.sizeZ = v; Hitbox.UpdateAll() end })
+Hitbox.UI:AddSlider("Transparency", { Text = "Transparency", Default = 0.5, Min = 0, Max = 1, Rounding = 2, Suffix = "%", Callback = function(v) Hitbox.Settings.transparency = v; Hitbox.UpdateAll() end })
+
+-- Добавил проверку на наличие менеджеров, чтобы скрипт не сломался, если они удалены
+if ThemeManager then
+    ThemeManager:SetLibrary(Library)
+    ThemeManager:SetFolder('Goose')
+    ThemeManager:ApplyToTab(Tabs['UI Settings'])
+end
+if SaveManager then
+    SaveManager:SetLibrary(Library)
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+    SaveManager:SetFolder('Goose/Trident')
+    SaveManager:BuildConfigSection(Tabs['UI Settings'])
+    SaveManager:LoadAutoloadConfig()
+end
